@@ -48,6 +48,9 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.util.SqlString;
 import org.apache.calcite.util.BuiltInMethod;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.sql.ResultSet;
@@ -65,6 +68,8 @@ import javax.sql.DataSource;
 public class JdbcToEnumerableConverter
     extends ConverterImpl
     implements EnumerableRel {
+  private final Logger logger = LoggerFactory.getLogger(getClass());
+
   protected JdbcToEnumerableConverter(
       RelOptCluster cluster,
       RelTraitSet traits,
@@ -95,9 +100,10 @@ public class JdbcToEnumerableConverter
         (JdbcConvention) child.getConvention();
     SqlString sqlString = generateSql(jdbcConvention.dialect);
     String sql = sqlString.getSql();
-    if (CalciteSystemProperty.DEBUG.value()) {
+    /*if (CalciteSystemProperty.DEBUG.value()) {
       System.out.println("[" + sql + "]");
-    }
+    }*/
+    logger.info("["+sql+"]");
     Hook.QUERY_PLAN.run(sql);
     final Expression sql_ =
         builder0.append("sql", Expressions.constant(sql));

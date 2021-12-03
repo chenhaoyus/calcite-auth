@@ -51,6 +51,10 @@ plugins {
 
 repositories {
     // At least for RAT
+    mavenLocal();
+    maven {
+        setUrl("http://10.0.37.9:8081/nexus/repository/maven-public/")
+    }
     mavenCentral()
 }
 
@@ -655,7 +659,7 @@ allprojects {
                         // Eager task creation is required due to
                         // https://github.com/gradle/gradle/issues/6246
                         artifact(sourcesJar.get())
-                        artifact(javadocJar.get())
+                        /*artifact(javadocJar.get())*/
                     }
 
                     // Use the resolved versions in pom.xml

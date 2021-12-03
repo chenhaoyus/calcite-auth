@@ -300,6 +300,8 @@ public class SqlDialect {
       return DatabaseProduct.MYSQL;
     case "REDSHIFT":
       return DatabaseProduct.REDSHIFT;
+    case "OSCAR":// OSCAR KSTORE MPP
+      return DatabaseProduct.OSCAR;
     }
     // Now the fuzzy matches.
     if (productName.startsWith("DB2")) {
@@ -1262,6 +1264,8 @@ public class SqlDialect {
     VERTICA("Vertica", "\"", NullCollation.HIGH),
     SQLSTREAM("SQLstream", "\"", NullCollation.HIGH),
     SPARK("Spark", null, NullCollation.LOW),
+
+    OSCAR("OSCAR", "\"", NullCollation.LOW),
 
     /** Paraccel, now called Actian Matrix. Redshift is based on this, so
      * presumably the dialect capabilities are similar. */

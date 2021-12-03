@@ -48,18 +48,15 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Ordering;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.function.BiFunction;
 import javax.sql.DataSource;
 
@@ -71,6 +68,9 @@ import javax.sql.DataSource;
  * as much as possible of the query logic to SQL.</p>
  */
 public class JdbcSchema implements Schema {
+
+  private Logger logger = LoggerFactory.getLogger(JdbcSchema.class);
+
   final DataSource dataSource;
   final String catalog;
   final String schema;
@@ -78,6 +78,8 @@ public class JdbcSchema implements Schema {
   final JdbcConvention convention;
   private ImmutableMap<String, JdbcTable> tableMap;
   private final boolean snapshot;
+
+  private Set<String> grantTables = new LinkedHashSet<>();
 
   @Experimental
   public static final ThreadLocal<Foo> THREAD_METADATA = new ThreadLocal<>();
@@ -95,13 +97,18 @@ public class JdbcSchema implements Schema {
    * @param schema Schema name pattern
    */
   public JdbcSchema(DataSource dataSource, SqlDialect dialect,
-      JdbcConvention convention, String catalog, String schema) {
-    this(dataSource, dialect, convention, catalog, schema, null);
+                    JdbcConvention convention, String catalog, String schema, Set<String> grantTables) {
+    this(dataSource, dialect, convention, catalog, schema, null,grantTables);
+  }
+
+  public JdbcSchema(DataSource dataSource, SqlDialect dialect,
+                    JdbcConvention convention, String catalog, String schema) {
+    this(dataSource, dialect, convention, catalog, schema, null,null);
   }
 
   private JdbcSchema(DataSource dataSource, SqlDialect dialect,
-      JdbcConvention convention, String catalog, String schema,
-      ImmutableMap<String, JdbcTable> tableMap) {
+                     JdbcConvention convention, String catalog, String schema,
+                     ImmutableMap<String, JdbcTable> tableMap, Set<String> grantTables) {
     this.dataSource = Objects.requireNonNull(dataSource);
     this.dialect = Objects.requireNonNull(dialect);
     this.convention = convention;
@@ -109,6 +116,7 @@ public class JdbcSchema implements Schema {
     this.schema = schema;
     this.tableMap = tableMap;
     this.snapshot = tableMap != null;
+    this.grantTables = grantTables;
   }
 
   public static JdbcSchema create(
@@ -191,6 +199,26 @@ public class JdbcSchema implements Schema {
     return createDialect(SqlDialectFactoryImpl.INSTANCE, dataSource);
   }
 
+  //TODO
+  /*
+   *增加已授权表集合
+   */
+  public static JdbcSchema create(
+      SchemaPlus parentSchema,
+      String name,
+      DataSource dataSource,
+      SqlDialectFactory dialectFactory,
+      String catalog,
+      String schema,
+      Set<String> grantTables)  {
+    final Expression expression =
+        Schemas.subSchemaExpression(parentSchema, name, JdbcSchema.class);
+    final SqlDialect dialect = createDialect(dialectFactory, dataSource);
+    final JdbcConvention convention =
+        JdbcConvention.of(dialect, expression, name);
+    return new JdbcSchema(dataSource, dialect, convention, catalog, schema,grantTables);
+  }
+
   /** Returns a suitable SQL dialect for the given data source. */
   public static SqlDialect createDialect(SqlDialectFactory dialectFactory,
       DataSource dataSource) {
@@ -214,7 +242,7 @@ public class JdbcSchema implements Schema {
 
   public Schema snapshot(SchemaVersion version) {
     return new JdbcSchema(dataSource, dialect, convention, catalog, schema,
-        tableMap);
+        tableMap,grantTables);
   }
 
   // Used by generated code.
@@ -301,6 +329,58 @@ public class JdbcSchema implements Schema {
     }
   }
 
+  private JdbcTable computeTables(String tableName) {
+    logger.info("==============================");
+    logger.info("computeTables加载表： " + tableName);
+    logger.info("==============================");
+    Connection connection = null;
+    ResultSet resultSet = null;
+    MetaImpl.MetaTable table = null;
+    try {
+      connection = dataSource.getConnection();
+      final Pair<String, String> catalogSchema = getCatalogSchema(connection);
+      final String catalog = catalogSchema.left;
+      final String schema = catalogSchema.right;
+
+      final DatabaseMetaData metaData = connection.getMetaData();
+
+      resultSet = metaData.getTables(catalog, schema, tableName.toUpperCase(Locale.ENGLISH), null);
+      while (resultSet.next()) {
+        final String catalogName = resultSet.getString(1);
+        final String schemaName = resultSet.getString(2);
+        final String tableTypeName = resultSet.getString(4);
+
+        table = new MetaImpl.MetaTable(catalogName, schemaName, tableName.toUpperCase(Locale.ENGLISH),
+            tableTypeName);
+      }
+
+      final String tableTypeName2 =
+          table.tableType == null
+              ? null
+              : table.tableType.toUpperCase(Locale.ROOT).replace(' ', '_');
+      final TableType tableType =
+          Util.enumVal(TableType.OTHER, tableTypeName2);
+      if (tableType == TableType.OTHER  && tableTypeName2 != null) {
+        System.out.println("Unknown table type: " + tableTypeName2);
+      }
+      final JdbcTable jdbcTable =
+          new JdbcTable(this, table.tableCat, table.tableSchem,
+              table.tableName, tableType);
+      ImmutableMap.Builder<String, JdbcTable> builder = ImmutableMap.builder();
+      builder.put(tableName,jdbcTable);
+      if(tableMap != null){
+        builder.putAll(tableMap);
+      }
+      tableMap = builder.build();
+      return jdbcTable;
+    } catch (SQLException e) {
+      throw new RuntimeException(
+          "Exception while reading tables", e);
+    } finally {
+      close(connection, null, resultSet);
+    }
+  }
+
   /** Returns [major, minor] version from a database metadata. */
   private List<Integer> version(DatabaseMetaData metaData) throws SQLException {
     return ImmutableList.of(metaData.getJDBCMajorVersion(),
@@ -342,7 +422,26 @@ public class JdbcSchema implements Schema {
   }
 
   public Table getTable(String name) {
-    return getTableMap(false).get(name);
+//    return getTableMap(false).get(name);
+    return getTableMap(name);
+  }
+
+  private synchronized Table getTableMap(
+      String tableName) {
+
+    if(null != grantTables && !grantTables.isEmpty()){
+      if(grantTables.contains(tableName)){
+        return (null != tableMap && null != tableMap.get(tableName) ? tableMap.get(tableName) : computeTables(tableName));
+      }
+      return null;
+    }else{
+      JdbcTable jdbcTable = null;
+      if(null == tableMap || (jdbcTable = tableMap.get(tableName)) == null){
+        jdbcTable = computeTables(tableName);
+      }
+      return jdbcTable;
+    }
+
   }
 
   private synchronized ImmutableMap<String, JdbcTable> getTableMap(
@@ -473,7 +572,16 @@ public class JdbcSchema implements Schema {
   public Set<String> getTableNames() {
     // This method is called during a cache refresh. We can take it as a signal
     // that we need to re-build our own cache.
-    return getTableMap(!snapshot).keySet();
+//    return getTableMap(!snapshot).keySet();
+    if(null!=grantTables&&!grantTables.isEmpty()){
+      return grantTables;
+    }else{
+      if(null != tableMap){
+        return tableMap.keySet();
+      }else{
+        return getTableMap(!snapshot).keySet();
+      }
+    }
   }
 
   protected Map<String, RelProtoDataType> getTypes() {

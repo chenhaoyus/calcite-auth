@@ -83,6 +83,13 @@ public abstract class CalciteSchema {
     this.name = name;
     if (tableMap == null) {
       this.tableMap = new NameMap<>();
+      //同步jdbcschema中的表
+      Set<String> tableNames = schema.getTableNames();
+      for (String tableName : tableNames) {
+        Table table = schema.getTable(tableName);
+        TableEntryImpl tableEntry = new TableEntryImpl(this, tableName, table, ImmutableList.of());
+        this.tableMap.put(tableName,tableEntry);
+      }
     } else {
       this.tableMap = Objects.requireNonNull(tableMap);
     }
